@@ -1,0 +1,107 @@
+context IBikeStationMgt::getBikeAvailability(category: String): Integer
+pre:
+    -- category adalah kategori sepeda yang valid
+    bikeStation.bikeCategories->exists(c: BikeCategory | c.name = category)
+post:
+    -- hasil yang dikembalikan menunjukkan jumlah sepeda yang tersedia dalam kategori tersebut
+    -- temukan kategori
+    let theCategory: BikeCategory = bikeStation.bikeCategories->
+        select(c: BikeCategory | c.name = category)->asSequence()->first() in
+    result = theCategory.bikes->select(b: Bike | b.status = 'Available')->size()
+
+
+context IBikeStationMgt::rentBike(category: String, hours: Integer): String
+pre:
+    -- category adalah kategori sepeda yang valid
+    bikeStation.bikeCategories->exists(c: BikeCategory | c.name = category) and
+    -- hours harus positif
+    hours > 0 and
+    -- setidaknya ada satu sepeda tersedia dalam kategori ini
+    bikeStation.bikeCategories->select(c: BikeCategory | c.name = category)->first().bikes->
+        select(b: Bike | b.status = 'Available')->size() > 0
+post:
+    -- ID rental yang dikembalikan tidak null
+    result <> null and
+    -- Ada catatan rental baru dalam sistem
+    bikeStation.rentalRecords->exists(r: RentalRecord | r.rentalId = result) and
+    -- Salah satu sepeda dari kategori yang diminta sekarang statusnya 'Rented'
+    let theCategory: BikeCategory = bikeStation.bikeCategories->
+        select(c: BikeCategory | c.name = category)->asSequence()->first() in
+    theCategory.bikes->select(b: Bike | b.status = 'Rented')->size() =
+    theCategory.bikes@pre->select(b: Bike | b.status = 'Rented')->size() + 1
+
+
+context ReturnInterface::returnBike(rentalId: String): Boolean
+pre:
+    -- rentalId adalah ID penyewaan yang valid
+    bikeStation.rentalRecords->exists(r: RentalRecord | r.rentalId = rentalId) and
+    -- sepeda dengan rental ID ini belum dikembalikan
+    bikeStation.rentalRecords->select(r: RentalRecord | r.rentalId = rentalId)->
+        asSequence()->first().allocation <> null
+post:
+    -- hasil yang dikembalikan true jika pengembalian berhasil
+    result = true and
+    -- sepeda sekarang tersedia
+    let theRecord: RentalRecord = bikeStation.rentalRecords->
+        select(r: RentalRecord | r.rentalId = rentalId)->asSequence()->first() in
+    let theBike: Bike = theRecord.allocation@pre in
+    theBike.status = 'Available' and
+    -- catatan rental menunjukkan sepeda telah dikembalikan
+    bikeStation.completedRentals->includes(theRecord)
+
+
+context ICustomerMgt::getCustomerRentals(customerId: String): Set(RentalDetails)
+pre:
+    -- customerId adalah ID pelanggan yang valid
+    customer->exists(c: Customer | c.id = customerId)
+post:
+    -- hasil yang dikembalikan berisi semua catatan rental untuk pelanggan ini
+    let theCustomer: Customer = customer->
+        select(c: Customer | c.id = customerId)->asSequence()->first() in
+    result->size() = theCustomer.rentalRecords->size() and
+    result->forAll(rd: RentalDetails | 
+        theCustomer.rentalRecords->exists(rr: RentalRecord |
+            rr.rentalId = rd.rentalId and
+            rr.duration = rd.hours and
+            rr.timestamp = rd.rentalDate))
+
+
+context ICustomerMgt::registerCustomer(name: String, phone: String, email: String): CustomerId
+pre:
+    -- parameter tidak boleh kosong
+    name <> '' and phone <> '' and email <> '' and
+    -- email harus valid (minimal mengandung @)
+    email.indexOf('@') > 0 and
+    -- email harus unik
+    not customer->exists(c: Customer | c.email = email)
+post:
+    -- ID pelanggan yang dikembalikan tidak null
+    result <> null and
+    -- Ada data pelanggan baru dalam sistem
+    customer->exists(c: Customer | c.id = result) and
+    -- Data pelanggan baru sesuai dengan parameter
+    let newCustomer: Customer = customer->
+        select(c: Customer | c.id = result)->asSequence()->first() in
+    newCustomer.name = name and
+    newCustomer.phone = phone and
+    newCustomer.email = email and
+    -- Jumlah pelanggan meningkat
+    customer->size() = customer@pre->size() + 1
+
+
+context BikeCategory::calculateRentalCost(hours: Integer): Currency
+pre:
+    -- hours harus positif
+    hours > 0
+post:
+    -- hasil yang dikembalikan adalah tarif per jam dikalikan durasi
+    result = self.hourlyRate * hours
+
+
+context BikeStation::isRentalValid(rentalId: String): Boolean
+pre:
+    -- tidak ada prekondisi khusus
+    true
+post:
+    -- hasil yang dikembalikan true jika dan hanya jika rentalId ada dalam activeRentals
+    result = self.activeRentals->exists(r: RentalRecord | r.rentalId = rentalId)
